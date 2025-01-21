@@ -1,4 +1,4 @@
-local config = require("c-format-comment").config
+local config = require("c-format-comment.config")
 
 -- Lua 5.1 compatibility
 
@@ -41,7 +41,7 @@ local function is_bad_comment(line)
   -- Find the offset of the comment end
   local line_col = string.find(line, comment_end)
 
-  if line_col > config.max_col or line_col < config.max_col then
+  if line_col > config.opts.max_col or line_col < config.opts.max_col then
     return true
   else
     return false
@@ -95,9 +95,16 @@ local function reflow_text(comment, indent)
   -- Visually select all lines in the range.
   vim.api.nvim_feedkeys(string.format("%dGV%dG", comment.line_start, comment.line_end), "x", false)
 
-  -- The maximum length of text needs to account for the current
-  -- indent level and length of the delimiter.
-  local text_width = config.opts.max_col - indent - #config.opts.delimiter.first_line_start - 1
+  local text_width
+
+  if config.opts.max_col ~= 0 then
+    -- The maximum length of text needs to account for the current
+    -- indent level and length of the delimiter.
+    text_width = config.opts.max_col - indent - #config.opts.delimiter.first_line_start - 1
+  else
+    text_width = vim.api.nvim_get_option_value("textwidth", { buf = 0 }) - indent -
+        #config.opts.delimiter.first_line_start - 1
+  end
 
   vim.api.nvim_set_option_value("textwidth", text_width, { buf = 0 })
 
@@ -124,8 +131,6 @@ end
 ---
 --- @param comment Comment Visual selection that may include a comment block.
 local function format_comment(comment)
-  local padding
-
   -- Save the indent level from the current line.
   local indent        = string.find(comment.lines[1], "%S") - 1
   local indent_string = string.sub(comment.lines[1], 1, indent)
@@ -136,11 +141,15 @@ local function format_comment(comment)
     -- Remove indent and trailing white space.
     line = vim.trim(line)
 
-    -- Remove the comment prefix.
-    line, _ = string.gsub(line, vim.pesc(comment_start) .. "%s?", "", 1)
+    -- If we joined lines to reflow a box style comment, then we want to
+    -- remove all the extra delimiters that have been included when the
+    -- lines were joined.
 
-    -- Remove the comment suffix.
-    line = string.sub(line, 1, - #comment_end - 1)
+    -- Remove all comment prefixs.
+    line, _ = string.gsub(line, vim.pesc("/*") .. "%s?", "")
+
+    -- Remove all comment suffixs.
+    line, _ = string.gsub(line, vim.pesc("*/") .. "%s?", "")
 
     -- Remove all trailing space now that delimeters
     -- have been removed
@@ -160,11 +169,47 @@ local function format_comment(comment)
 
   -- Add comment delimeters back to the lines.
   for index, line in ipairs(comment.lines) do
-    -- Calculate the padding till the end of line delimiter.
-    padding = config.max_col - indent - #comment_start - 1 - #line
+    local start_delimiter
+    local end_delimiter
+
+    if index == 1 then
+      start_delimiter = config.opts.delimiter.first_line_start
+      end_delimiter = config.opts.delimiter.first_line_end
+    elseif index == #comment.lines then
+      start_delimiter = config.opts.delimiter.last_line_start
+      end_delimiter = config.opts.delimiter.last_line_end
+    else
+      start_delimiter = config.opts.delimiter.line_start
+      end_delimiter = config.opts.delimiter.line_end
+    end
+
+    -- Only one space between start delimiter and the comment.
+    local start_delimiter_padding = 1
+
+    -- Calculate the padding that will be required if the line does not
+    -- have a start delimiter.
+    if #start_delimiter == 0 then
+
+      -- Assume delimiters are two characters.
+      start_delimiter_padding = start_delimiter_padding + 2
+    end
+
+    local box_padding = 0
+
+    -- Calculate the padding until the end of line delimiter for box style
+    -- comments.
+    if config.opts.box_comment then
+      box_padding = config.opts.max_col - indent - start_delimiter_padding - 1 - #line
+    else
+      -- Only add a space if the end delimiter is present for non box style
+      -- comments.
+      if #end_delimiter > 0 then
+        box_padding = 1
+      end
+    end
 
     -- Format the line.
-    line = indent_string .. comment_start .. " " .. line .. string.rep(" ", padding) .. comment_end
+    line = indent_string .. start_delimiter .. string.rep(" ", start_delimiter_padding) .. line .. string.rep(" ", box_padding) .. end_delimiter
 
     -- Update the line.
     comment.lines[index] = line
@@ -426,8 +471,6 @@ function C_Format_Comment.format_all()
         -- Only format the comment block if we determined that it is a bad
         -- comment.
         if bad_comment then
-          -- Get the lines from the selection (API zero indexed).
-          comment.lines = vim.api.nvim_buf_get_lines(0, comment.line_start - 1, comment.line_end, false)
 
           C_Format_Comment.format(comment, options)
         end

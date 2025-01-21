@@ -9,10 +9,12 @@
 --- Default options
 ---@class C_Format_Comment_Options : table
 ---@field max_col integer Maximum column for the right most character of end delimieters. Defaults to textwidth for the local buffer if zero. */
+---@field box_comment boolean Use box style comments.
 ---@field delimiter Comment_Delimiter_Options Comment block options.
 local defaults = {
 
-  max_col = 0, -- Maximum column for the right most character of end delimiters. Defaults to textwidth for the local buffer if zero. */
+  max_col = 80, -- Maximum column for the right most character of end delimiters. Defaults to textwidth for the local buffer if zero. */
+  box_comment = false, -- Use box style comments.
 
   -- Delimiter options for the comment block.
   delimiter = {
