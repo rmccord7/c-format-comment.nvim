@@ -146,10 +146,10 @@ local function format_comment(comment)
     -- lines were joined.
 
     -- Remove all comment prefixs.
-    line, _ = string.gsub(line, vim.pesc("/*") .. "%s?", "")
+    line, _ = string.gsub(line, vim.pesc("/*"), "")
 
     -- Remove all comment suffixs.
-    line, _ = string.gsub(line, vim.pesc("*/") .. "%s?", "")
+    line, _ = string.gsub(line, vim.pesc("*/"), "")
 
     -- Remove all trailing space now that delimeters
     -- have been removed
@@ -189,7 +189,6 @@ local function format_comment(comment)
     -- Calculate the padding that will be required if the line does not
     -- have a start delimiter.
     if #start_delimiter == 0 then
-
       -- Assume delimiters are two characters.
       start_delimiter_padding = start_delimiter_padding + 2
     end
@@ -209,7 +208,8 @@ local function format_comment(comment)
     end
 
     -- Format the line.
-    line = indent_string .. start_delimiter .. string.rep(" ", start_delimiter_padding) .. line .. string.rep(" ", box_padding) .. end_delimiter
+    line = indent_string ..
+    start_delimiter .. string.rep(" ", start_delimiter_padding) .. line .. string.rep(" ", box_padding) .. end_delimiter
 
     -- Update the line.
     comment.lines[index] = line
@@ -302,7 +302,7 @@ function C_Format_Comment.format(comment, options)
 
   -- If API called explicitly then we need to backup the current user's
   -- options before we reflow the text. It is more efficient to do this
-  -- once if we are going to format multiple comment blocks. */
+  -- once if we are going to format multiple comment blocks.
   if next(options) == nil then
     backup_options(options)
 
@@ -314,7 +314,7 @@ function C_Format_Comment.format(comment, options)
   end
 
   -- If API called explicitly then the visual selection must be a comment
-  -- block. */
+  -- block.
   if next(comment) == nil then
     comment = {
       line_start = unpack(vim.api.nvim_buf_get_mark(0, "<")),
@@ -395,6 +395,9 @@ function C_Format_Comment.format_all()
   local bad_comment = false
 
   while index <= #selection.lines do
+    -- For new comment block.
+    local bad_comment_block = false
+
     -- Get the current line.
     line = selection.lines[index]
 
@@ -408,8 +411,12 @@ function C_Format_Comment.format_all()
         lines      = {}, -- Only used when formatting a commente block.
       }
 
-      -- If the current line is a bad comment
+      -- If the current line is a bad comment.
       bad_comment = is_bad_comment(line)
+
+      if bad_comment then
+        bad_comment_block = true
+      end
 
       -- If this is not the last line, then we need to find the end of the
       -- comment block.
@@ -418,7 +425,7 @@ function C_Format_Comment.format_all()
         -- find the last line of the comment block.
 
         -- selene: allow(incorrect_standard_library_use)
-        for index2, line2 in ipairs(table.unpack(selection.lines, index + 1)) do
+        for index2, line2 in ipairs({ table.unpack(selection.lines, index + 1) }) do
           -- If the current line is a comment, then we have not found the end
           -- of the comment block.
           if is_comment(line2) then
@@ -427,8 +434,17 @@ function C_Format_Comment.format_all()
             -- looking for the end of the comment block.
             bad_comment = is_bad_comment(line2)
 
+            if bad_comment then
+              bad_comment_block = true
+            end
+
             -- Update the end of the comment block.
             comment.line_end = comment.line_end + 1
+
+            -- Since we processed additional lines we need to update the main
+            -- loop to skip over lines that we already processed in the inner
+            -- loop.
+            index = index + index2
           else
             -- Store the current line end so that if additional lines are added
             -- we can determine how many were added. The format_comment() function
@@ -437,7 +453,7 @@ function C_Format_Comment.format_all()
 
             -- Only format the comment block if we determined that it contains
             -- a line that is a bad comment.
-            if bad_comment then
+            if bad_comment_block then
               C_Format_Comment.format(comment, options)
 
               -- Set the number of lines that were added after the comment
@@ -450,19 +466,26 @@ function C_Format_Comment.format_all()
             -- loop.
             index = index + index2
 
-            -- If there are more lines in the visual selection, then there may
-            -- be another comment block that needs to be formatted.
-            if index ~= #selection.lines then
-              -- Next comment block should start after the current line
-              -- (non-comment) that was just processed and marked the end of
-              -- the current comment block.
-              selection.line_start = comment.line_end + 2
-              selection.line_end   = comment.line_end + 2
-            end
-
             -- Continue processing lines in the visual selection.
             break
           end
+        end
+
+        -- Handle case where last line is the end of the comment
+        -- block.
+        if index == #selection.lines then
+          if bad_comment_block then
+            C_Format_Comment.format(comment, options)
+          end
+        else
+          -- If there are more lines in the visual selection, then there may
+          -- be another comment block that needs to be formatted.
+
+          -- Next comment block should start after the current line
+          -- (non-comment) that was just processed and marked the end of
+          -- the current comment block.
+          selection.line_start = comment.line_end + 2
+          selection.line_end   = comment.line_end + 2
         end
       else
         -- The line end for the comment block has already been set to start for
@@ -470,8 +493,7 @@ function C_Format_Comment.format_all()
 
         -- Only format the comment block if we determined that it is a bad
         -- comment.
-        if bad_comment then
-
+        if bad_comment_block then
           C_Format_Comment.format(comment, options)
         end
       end
