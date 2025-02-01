@@ -17,27 +17,87 @@ end
 --- @field line_end integer Last line for the visual selection.
 --- @field lines string[] Stored lines from line_start to line_end.
 
-local comment_start = "/*"
-
 --- @class C_Format_Comment
 local C_Format_Comment = {}
 
---- Checks if the current line is a comment.
+--TODO:
+--- Checks if the current line is a c language comment, but doesn't properly
+--- handle finding the end of a comment block for find all comments in visual
+--- selection.
+
 ---
 --- @param line string Current line.
 local function is_comment(line)
   -- Remove all whitespace from beginning and end of string.
   line = vim.trim(line)
 
+  local c_comment_block_start = "/*"
+  local c_comment_single_start = "//"
+
   -- Return true if the line begins with a comment. Otherwise false.
-  return line:sub(1, #comment_start) == comment_start
+  return line:sub(1, #c_comment_block_start) == c_comment_block_start or
+  line:sub(1, #c_comment_single_start) == c_comment_single_start
+end
+
+--- Checks if the current line is the start of a comment block.
+---
+--- @param line string Current line.
+local function is_start_of_comment_block(line)
+  -- Remove all whitespace from beginning and end of string.
+  line = vim.trim(line)
+
+  -- The start delimiter for the first line comment is mandatory.
+  local start_delimiter = config.opts.delimiter.first_line_start
+
+  if line:sub(1, #start_delimiter) == start_delimiter then
+    -- The end delimiter for the first line comment is optional.
+    local end_delimiter = config.opts.delimiter.first_line_end
+
+    if string.len(end_delimiter) > 0 then
+      if line:sub(-2, #end_delimiter) == end_delimiter then
+        return true
+      end
+    else
+      -- There is no end delimiter for the first comment so just return we
+      -- matched the start of the comment block.
+      return true
+    end
+  end
+
+  return false
+end
+
+--- Checks if the current line is the end of a comment block.
+---
+--- @param line string Current line.
+local function is_end_of_comment_block(line)
+  -- Remove all whitespace from beginning and end of string.
+  line = vim.trim(line)
+
+  -- The end delimiter for the last line comment is mandatory.
+  local end_delimiter = config.opts.delimiter.last_line_start
+
+  if line:sub(-2, #end_delimiter) == end_delimiter then
+    -- The start delimiter for the last line comment is optional.
+    local start_delimiter = config.opts.delimiter.last_line_end
+    if string.len(start_delimiter) > 0 then
+      if line:sub(1, #start_delimiter) == start_delimiter then
+        return true
+      end
+    else
+      -- There is no start delimiter for the last comment so just return we
+      -- matched the end of the comment block.
+      return true
+    end
+  end
+
+  return false
 end
 
 --- Checks if the current line of the current comment is malformatted.
 ---
 --- @param line string Current line.
 local function is_bad_comment(line)
-
   -- Get the end of the current comment line.
   local line_col = string.len(line)
 
@@ -209,7 +269,8 @@ local function format_comment(comment)
 
     -- Format the line.
     line = indent_string ..
-    start_delimiter .. string.rep(" ", start_delimiter_padding) .. line .. string.rep(" ", box_padding) .. end_delimiter
+        start_delimiter ..
+        string.rep(" ", start_delimiter_padding) .. line .. string.rep(" ", box_padding) .. end_delimiter
 
     -- Update the line.
     comment.lines[index] = line
@@ -239,7 +300,7 @@ function C_Format_Comment.find_next_bad_comment()
       if is_bad_comment(line) then
         -- Find the offset of the comment start. This offset is
         -- the actual comment string not the delimiter.
-        local line_col = string.find(line, comment_start, 1, true) + #comment_start
+        local line_col = string.find(line, "/*", 1, true) + #"/*"
 
         -- Update the cursor position at beginning of the comment text.
         vim.api.nvim_win_set_cursor(0, { current_line_number, line_col })
@@ -401,9 +462,8 @@ function C_Format_Comment.format_all()
     -- Get the current line.
     line = selection.lines[index]
 
-    -- If the current line is a comment, then this is the start of a comment
-    -- block.
-    if is_comment(line) then
+    -- Determine if this line is the start of a comment block.
+    if is_start_of_comment_block(line) then
       --- @type Comment
       local comment = {
         line_start = selection.line_start,
@@ -426,6 +486,10 @@ function C_Format_Comment.format_all()
 
         -- selene: allow(incorrect_standard_library_use)
         for index2, line2 in ipairs({ table.unpack(selection.lines, index + 1) }) do
+          --TODO: Currently broken for current comment finding without being
+          --able to determine if the next line is not a comment if we don't
+          --have delimieters between lines.
+
           -- If the current line is a comment, then we have not found the end
           -- of the comment block.
           if is_comment(line2) then
