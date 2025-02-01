@@ -18,7 +18,6 @@ end
 --- @field lines string[] Stored lines from line_start to line_end.
 
 local comment_start = "/*"
-local comment_end = "*/"
 
 --- @class C_Format_Comment
 local C_Format_Comment = {}
@@ -38,10 +37,11 @@ end
 ---
 --- @param line string Current line.
 local function is_bad_comment(line)
-  -- Find the offset of the comment end
-  local line_col = string.find(line, comment_end)
 
-  if line_col > config.opts.max_col or line_col < config.opts.max_col then
+  -- Get the end of the current comment line.
+  local line_col = string.len(line)
+
+  if line_col > config.opts.max_col then
     return true
   else
     return false
