@@ -20,11 +20,7 @@ end
 --- @class C_Format_Comment
 local C_Format_Comment = {}
 
---TODO:
---- Checks if the current line is a c language comment, but doesn't properly
---- handle finding the end of a comment block for find all comments in visual
---- selection.
-
+--- Checks if the current line is a comment.
 ---
 --- @param line string Current line.
 local function is_comment(line)
@@ -147,139 +143,6 @@ local function restore_options(options)
   vim.api.nvim_set_option_value("formatoptions", options.formatoptions, { buf = 0 })
 end
 
---- Reflows the text.
----
---- @param comment Comment Visual selection that may include a comment block.
---- @param indent integer Current indent level before the comment block.
-local function reflow_text(comment, indent)
-  -- Visually select all lines in the range.
-  vim.api.nvim_feedkeys(string.format("%dGV%dG", comment.line_start, comment.line_end), "x", false)
-
-  local text_width
-
-  if config.opts.max_col ~= 0 then
-    -- The maximum length of text needs to account for the current
-    -- indent level and length of the delimiter.
-    text_width = config.opts.max_col - indent - #config.opts.delimiter.first_line_start - 1
-  else
-    text_width = vim.api.nvim_get_option_value("textwidth", { buf = 0 }) - indent -
-        #config.opts.delimiter.first_line_start - 1
-  end
-
-  vim.api.nvim_set_option_value("textwidth", text_width, { buf = 0 })
-
-  -- Reflow the text.
-  vim.api.nvim_feedkeys("gq", "x", false)
-
-  -- Visually Select the all lines from the reflow. More lines may have been
-  -- added, but we can quickly re-select them.
-  vim.api.nvim_feedkeys("'[V']", "x", false)
-
-  -- If additional lines were added, then we need to update the last line of
-  -- the section. This will be in ascending order order so we don't need to
-  -- swap these.
-  comment.line_end = unpack(vim.api.nvim_buf_get_mark(0, "]"))
-
-  -- Clear the visual selection.
-  vim.api.nvim_feedkeys(vim.api.nvim_eval('"\\<ESC>"'), "x", false)
-
-  -- Get the lines from the selection (API zero indexed).
-  comment.lines = vim.api.nvim_buf_get_lines(0, comment.line_start - 1, comment.line_end, false)
-end
-
---- Formats the comment.
----
---- @param comment Comment Visual selection that may include a comment block.
-local function format_comment(comment)
-  -- Save the indent level from the current line.
-  local indent        = string.find(comment.lines[1], "%S") - 1
-  local indent_string = string.sub(comment.lines[1], 1, indent)
-
-  -- Remove indentation, comment delimiters, and trailing white space from all
-  -- lines.
-  for index, line in ipairs(comment.lines) do
-    -- Remove indent and trailing white space.
-    line = vim.trim(line)
-
-    -- If we joined lines to reflow a box style comment, then we want to
-    -- remove all the extra delimiters that have been included when the
-    -- lines were joined.
-
-    -- Remove all comment prefixs.
-    line, _ = string.gsub(line, vim.pesc("/*"), "")
-
-    -- Remove all comment suffixs.
-    line, _ = string.gsub(line, vim.pesc("*/"), "")
-
-    -- Remove all trailing space now that delimeters
-    -- have been removed
-    line = vim.trim(line)
-
-    -- Update the line.
-    comment.lines[index] = line
-  end
-
-  -- Update the lines in the buffer (API zero indexed).
-  vim.api.nvim_buf_set_lines(0, comment.line_start - 1, comment.line_end, false, comment.lines)
-
-  -- Reflow the text block. This function will return the new section line end
-  -- if additional lines were added to the section due to the reflowing of the
-  -- text.
-  reflow_text(comment, indent)
-
-  -- Add comment delimeters back to the lines.
-  for index, line in ipairs(comment.lines) do
-    local start_delimiter
-    local end_delimiter
-
-    if index == 1 then
-      start_delimiter = config.opts.delimiter.first_line_start
-      end_delimiter = config.opts.delimiter.first_line_end
-    elseif index == #comment.lines then
-      start_delimiter = config.opts.delimiter.last_line_start
-      end_delimiter = config.opts.delimiter.last_line_end
-    else
-      start_delimiter = config.opts.delimiter.line_start
-      end_delimiter = config.opts.delimiter.line_end
-    end
-
-    -- Only one space between start delimiter and the comment.
-    local start_delimiter_padding = 1
-
-    -- Calculate the padding that will be required if the line does not
-    -- have a start delimiter.
-    if #start_delimiter == 0 then
-      -- Assume delimiters are two characters.
-      start_delimiter_padding = start_delimiter_padding + 2
-    end
-
-    local box_padding = 0
-
-    -- Calculate the padding until the end of line delimiter for box style
-    -- comments.
-    if config.opts.box_comment then
-      box_padding = config.opts.max_col - indent - start_delimiter_padding - 1 - #line
-    else
-      -- Only add a space if the end delimiter is present for non box style
-      -- comments.
-      if #end_delimiter > 0 then
-        box_padding = 1
-      end
-    end
-
-    -- Format the line.
-    line = indent_string ..
-        start_delimiter ..
-        string.rep(" ", start_delimiter_padding) .. line .. string.rep(" ", box_padding) .. end_delimiter
-
-    -- Update the line.
-    comment.lines[index] = line
-  end
-
-  -- Update the lines in the buffer (API zero indexed).
-  vim.api.nvim_buf_set_lines(0, comment.line_start - 1, comment.line_end, false, comment.lines)
-end
-
 --- Visually selects the next bad comment from the current line. If the current
 --- line is a bad comment, then that comment will be visually selected.
 function C_Format_Comment.find_next_bad_comment()
@@ -351,75 +214,66 @@ function C_Format_Comment.find_next_bad_comment()
   end
 end
 
---- Formats a comment.
----
---- @param comment Comment Visual selection that may include a comment block.
---- @param options table Text options that need to be restored after the format.
-function C_Format_Comment.format(comment, options)
-  comment = comment or {}
-  options = options or {}
+--- Formats a comment block.
+function C_Format_Comment.format()
 
-  local restore
+  local mode = vim.api.nvim_get_mode()['mode']
 
-  -- If API called explicitly then we need to backup the current user's
-  -- options before we reflow the text. It is more efficient to do this
-  -- once if we are going to format multiple comment blocks.
-  if next(options) == nil then
-    backup_options(options)
-
-    -- Flag that we need to restore user options when
-    -- we are done.
-    restore = true
-  else
-    restore = false
+  if mode ~= 'n' then
+    vim.notify("[CFC] Unsupported mode", vim.log.levels.ERROR)
+    return
   end
 
-  -- If API called explicitly then the visual selection must be a comment
-  -- block.
-  if next(comment) == nil then
-    comment = {
-      line_start = unpack(vim.api.nvim_buf_get_mark(0, "<")),
-      line_end   = unpack(vim.api.nvim_buf_get_mark(0, ">")),
-      lines      = {},
-    }
+  -- Backup user text options.
+  local options = {}
 
-    -- If the visual selection start is not in order of
-    -- increasing line order swap them. This may happen if
-    -- the user explicitly made the visual selection.
-    if comment.line_start > comment.line_end then
-      comment.line_start, comment.line_end = comment.line_end, comment.line_start
-    end
+  backup_options(options)
 
-    -- Clear the visual selection.
-    vim.api.nvim_feedkeys(vim.api.nvim_eval('"\\<ESC>"'), "x", false)
-  end
+  --- @type Comment_Block
+  local Comment_Block = require("c-format-comment.comment")
 
-  -- Get the lines for the comment block.
-  comment.lines = vim.api.nvim_buf_get_lines(0, comment.line_start - 1, comment.line_end, false)
+  local cb = Comment_Block.new()
 
-  -- Process the comment.
-  for index, line in ipairs(comment.lines) do
-    -- If the current line is a comment.
-    if is_comment(line) then
-      -- If we have reached the end of the comment block.
-      if index == #comment.lines then
-        -- Format the comment. This may add additional lines
-        -- to the comment block when the text is reflowed.
-        format_comment(comment)
-      end
-    else
-      vim.notify("[CFC] Not a comment", vim.log.levels.ERROR)
+  if cb:is_comment_block() then
 
-      -- Found a line in the visual selection that is not
-      -- a comment. No formatting will be done..
-      break
-    end
-  end
+    -- if mode == 'v' or mode == 'V' then
+    --   -- Make sure that the visual selection lines up with what is reported by
+    --   -- TS for the comment block.
+    --   local start_row, start_col = vim.api.nvim_buf_get_mark(0, "<")
+    --   local end_row, end_col = vim.api.nvim_buf_get_mark(0, ">")
+    --
+    --   -- If the visual selection start is not in order of
+    --   -- increasing line order swap them. This may happen if
+    --   -- the user explicitly made the visual selection.
+    --   if start_row > end_row then
+    --     start_row, end_row = end_row, start_row
+    --     start_col, end_col = end_col, start_col
+    --   end
+    --
+    --   -- Clear the visual selection.
+    --   vim.api.nvim_feedkeys(vim.api.nvim_eval('"\\<ESC>"'), "x", false)
+    --
+    --   -- Make sure the visual selection is in range of the comment block.
+    --   if not cb:check_range(start_row, start_col, end_row, end_col) then
+    --     vim.notify("[CFC] Invalid selection", vim.log.levels.ERROR)
+    --     return
+    --   end
+    -- else
+    --   -- Nothing to do for normal mode.
+    --   if mode ~= 'n' then
+    --     vim.notify("[CFC] Unsupported mode", vim.log.levels.ERROR)
+    --     return
+    --   end
+    -- end
 
-  -- If this was a command, then we need to restore
-  -- the user options.
-  if restore then
+    -- Format the comment. This may add additional lines
+    -- to the comment block when the text is reflowed.
+    cb:format()
+
+    -- Restore user text options.
     restore_options(options)
+  else
+    vim.notify("[CFC] Not a comment", vim.log.levels.ERROR)
   end
 end
 
