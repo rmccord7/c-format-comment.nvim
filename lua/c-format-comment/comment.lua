@@ -46,6 +46,24 @@ function Comment_Block.new()
 
       -- This removes the indentation from the comment block since TS only returns the text.
       new.lines = vim.split(vim.treesitter.get_node_text(new.node, 0), "\n")
+
+      -- Handle block style comment.
+      local next_node = new.node:next_sibling()
+
+      while next_node and next_node:type() == "comment" do
+
+        -- Update the end row and end column.
+        _, _, new.end_row, new.end_col = next_node:range()
+
+        -- TSNode is zero indexed.
+        new.end_row = new.end_row + 1
+        new.end_col = new.end_col + 1
+
+        -- This removes the indentation from the comment block since TS only returns the text.
+        table.insert(new.lines, vim.treesitter.get_node_text(next_node, 0))
+
+        next_node = next_node:next_sibling()
+      end
     else
       print("Not a TS comment")
     end
