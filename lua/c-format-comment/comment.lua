@@ -30,24 +30,32 @@ function Comment_Block.new()
 
   if new.node then
 
+    -- Make sure current node is a comment.
     if new.node:type() == "comment" then
       new.valid = true
 
+      -- Get the current comment start/end.
       new.start_row, new.start_col, new.end_row, new.end_col = new.node:range()
 
-      -- TSNode is zero indexed.
-      new.start_row = new.start_row + 1
-      new.start_col = new.start_col + 1
-      new.end_row = new.end_row + 1
-      new.end_col = new.end_col + 1
-
-      -- Indent level is the indentation for the first line of the comment block.
-      new.indent = new.start_col - 1
-
-      -- This removes the indentation from the comment block since TS only returns the text.
+      -- This removes the indentation from the comment block since TS only
+      -- returns the text.
       new.lines = vim.split(vim.treesitter.get_node_text(new.node, 0), "\n")
 
-      -- Handle block style comment.
+      -- Find the start of the comment block if this is a block style comment.
+      local prev_node = new.node:prev_sibling()
+
+      while prev_node and prev_node:type() == "comment" do
+
+        -- Update the start row and start column.
+        new.start_row, new.start_col, _, _ = prev_node:range()
+
+        -- Add lines before the current line.
+        table.insert(new.lines, 1, vim.treesitter.get_node_text(prev_node, 0))
+
+        prev_node = prev_node:prev_sibling()
+      end
+
+      -- Find the end of the comment block if this is a block style comment.
       local next_node = new.node:next_sibling()
 
       while next_node and next_node:type() == "comment" do
@@ -55,15 +63,21 @@ function Comment_Block.new()
         -- Update the end row and end column.
         _, _, new.end_row, new.end_col = next_node:range()
 
-        -- TSNode is zero indexed.
-        new.end_row = new.end_row + 1
-        new.end_col = new.end_col + 1
-
-        -- This removes the indentation from the comment block since TS only returns the text.
+        -- Add lines after the current line.
         table.insert(new.lines, vim.treesitter.get_node_text(next_node, 0))
 
         next_node = next_node:next_sibling()
       end
+
+      -- TSNode is zero indexed.
+      new.start_row = new.start_row + 1
+      new.start_col = new.start_col + 1
+      new.end_row = new.end_row + 1
+      new.end_col = new.end_col + 1
+
+      -- Indent level is the indentation for the first line of the comment
+      -- block.
+      new.indent = new.start_col - 1
     else
       print("Not a TS comment")
     end
